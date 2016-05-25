@@ -29,6 +29,8 @@ var http = require('http')
   , Multipart = require('./lib/multipart').Multipart
   , Redirect = require('./lib/redirect').Redirect
   , Tunnel = require('./lib/tunnel').Tunnel
+  , dns = require('dns')
+    
 
 var safeStringify = helpers.safeStringify
   , isReadStream = helpers.isReadStream
@@ -504,6 +506,17 @@ Request.prototype.init = function (options) {
     }
   }
 
+  if (options.tryMultipleAddresses) {
+    self.tryMultipleAddresses = options.tryMultipleAddresses
+    self.pendingHostResolution = true
+    debug('Attempting multiple address lookup for', self.uri.hostname)
+    dns.resolve(self.uri.hostname, function (err, addresses) {
+      delete self.pendingHostResolution
+      self.destinationAddresses = addresses
+      self.emit('resolvedDestinationAddresses')
+    })
+  }
+  
   if (self.pool === false) {
     self.agent = false
   } else {
@@ -740,6 +753,13 @@ Request.prototype.start = function () {
     return
   }
 
+  if (self.pendingHostResolution) {
+    self.once('resolvedDestinationAddresses', function() {
+      self.start()
+    })
+    return
+  }
+
   self._started = true
   self.method = self.method || 'GET'
   self.href = self.uri.href
@@ -756,6 +776,16 @@ Request.prototype.start = function () {
   var reqOptions = copy(self)
   delete reqOptions.auth
 
+  if (self.tryMultipleAddresses && self.destinationAddresses.length > 0) {
+    var destinationAddress = self.destinationAddresses.pop()
+    // Set the host header to the original hostname, even though
+    // we may send the request to a different host
+    reqOptions.headers.host = reqOptions.uri.hostname
+    debug('Sending request to', destinationAddress, 'when trying multiple')
+    // But send the request to a different host.
+    reqOptions.hostname = destinationAddress
+  }
+  
   debug('make request', self.uri.href)
 
   try {
@@ -825,6 +855,13 @@ Request.prototype.onRequestError = function (error) {
   var self = this
   if (self._aborted) {
     return
+  }
+  if (self.req && error.code === 'ECONNREFUSED' && self.tryMultipleAddresses &&
+      self.destinationAddresses.length > 0) {
+    debug('Got connection refused error, attempting another address for URL')
+    self.start()
+    self.req.end()
+    return    
   }
   if (self.req && self.req._reusedSocket && error.code === 'ECONNRESET'
       && self.agent.addRequestNoreuse) {
@@ -1411,7 +1448,15 @@ Request.prototype.write = function () {
   if (!self._started) {
     self.start()
   }
+<<<<<<< HEAD
   if (self.req) {
+=======
+  if (!self._started) {
+    self.once('request', function() {
+      self.req.write.apply(self.req, arguments)
+    })
+  } else {
+>>>>>>> Add support for trying multiple addresses of a server
     return self.req.write.apply(self.req, arguments)
   }
 }
@@ -1425,7 +1470,15 @@ Request.prototype.end = function (chunk) {
   if (!self._started) {
     self.start()
   }
+<<<<<<< HEAD
   if (self.req) {
+=======
+  if (!self._started) {
+    self.once('request', function() {
+      self.req.end()
+    })
+  } else {
+>>>>>>> Add support for trying multiple addresses of a server
     self.req.end()
   }
 }
